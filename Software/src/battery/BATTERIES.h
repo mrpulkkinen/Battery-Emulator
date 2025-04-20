@@ -82,6 +82,10 @@ void setup_can_shunt();
 #include "MEB-BATTERY.h"
 #endif
 
+#ifdef EGOLF_BATTERY
+#include "EGOLF-BATTERY.h"
+#endif
+
 #ifdef MG_5_BATTERY
 #include "MG-5-BATTERY.h"
 #endif

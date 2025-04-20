@@ -43,6 +43,7 @@
 //#define TESLA_MODEL_SX_BATTERY
 //#define VOLVO_SPA_BATTERY
 //#define VOLVO_SPA_HYBRID_BATTERY
+//#define BATTERY_TYPE_EGOLF
 //#define TEST_FAKE_BATTERY
 //#define DOUBLE_BATTERY  //Enable this line if you use two identical batteries at the same time (requires separate CAN setup)
 
