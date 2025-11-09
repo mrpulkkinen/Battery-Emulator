@@ -65,6 +65,8 @@ const char* name_for_battery_type(BatteryType type) {
       return GeelyGeometryCBattery::Name;
     case BatteryType::HyundaiIoniq28:
       return HyundaiIoniq28Battery::Name;
+    case BatteryType::MqbEv:
+      return MqbEvBattery::Name;
     case BatteryType::OrionBms:
       return OrionBms::Name;
     case BatteryType::Sono:
@@ -169,6 +171,8 @@ Battery* create_battery(BatteryType type) {
       return new GeelyGeometryCBattery();
     case BatteryType::HyundaiIoniq28:
       return new HyundaiIoniq28Battery();
+    case BatteryType::MqbEv:
+      return new MqbEvBattery();
     case BatteryType::OrionBms:
       return new OrionBms();
     case BatteryType::Sono:

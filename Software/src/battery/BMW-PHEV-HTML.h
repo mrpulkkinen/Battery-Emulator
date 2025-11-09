@@ -1,6 +1,7 @@
 #ifndef _BMW_PHEV_HTML_H
 #define _BMW_PHEV_HTML_H
 #include <Arduino.h>
+#include <cstdio>
 #include "../datalayer/datalayer.h"
 #include "../datalayer/datalayer_extended.h"
 #include "../devboard/webserver/BatteryHtmlRenderer.h"
@@ -506,7 +507,7 @@ class BmwPhevHtmlRenderer : public BatteryHtmlRenderer {
         uint8_t status = datalayer_extended.bmwphev.dtc_status[i];
 
         char dtcStr[12];
-        sprintf(dtcStr, "%06lX", code);
+        snprintf(dtcStr, sizeof(dtcStr), "%06X", code);
 
         String statusStr = "Stored";
         String statusColor = "#757575";
