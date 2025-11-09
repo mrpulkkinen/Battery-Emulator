@@ -201,26 +201,27 @@ class MQBModule {
 
 class MQBModuleManager {
  public:
-  void handleCellFrame(const CAN_frame& frame) {
+  bool handleCellFrame(const CAN_frame& frame) {
     if (frame.ext_ID) {
-      return;
+      return false;
     }
     if (frame.ID < kModuleFrameIdMin || frame.ID > kModuleFrameIdMax) {
-      return;
+      return false;
     }
     uint16_t offset = static_cast<uint16_t>(frame.ID - kModuleFrameIdMin);
     uint8_t module = static_cast<uint8_t>(offset / 4) + 1;
     uint8_t block = static_cast<uint8_t>(offset % 4);
     if (module == 0 || module > MQB_EV_MAX_MODULES) {
-      return;
+      return false;
     }
     modules_[module].decodeCellBlock(block, frame);
     last_activity_ms_ = millis();
+    return true;
   }
 
-  void handleTempFrame(const CAN_frame& frame) {
+  bool handleTempFrame(const CAN_frame& frame) {
     if (!frame.ext_ID) {
-      return;
+      return false;
     }
     const uint32_t id = frame.ID;
     if (id > kTempFrameType1Min && id < kTempFrameType1Max) {
@@ -231,8 +232,9 @@ class MQBModuleManager {
       if (cmu > 0 && cmu <= MQB_EV_MAX_MODULES) {
         modules_[cmu].decodeTempFrameType1(frame);
         last_activity_ms_ = millis();
+        return true;
       }
-      return;
+      return false;
     }
     if (id > kTempFrameType2Min && id < kTempFrameType2Max) {
       uint8_t cmu = static_cast<uint8_t>(id & 0x0F);
@@ -240,8 +242,10 @@ class MQBModuleManager {
       if (cmu > 0 && cmu <= MQB_EV_MAX_MODULES) {
         modules_[cmu].decodeTempFrameType2(frame);
         last_activity_ms_ = millis();
+        return true;
       }
     }
+    return false;
   }
 
   void refreshAggregates() {
@@ -347,8 +351,11 @@ void MqbEvBattery::setup(void) {
 }
 
 void MqbEvBattery::handle_incoming_can_frame(CAN_frame rx_frame) {
-  module_manager_->handleCellFrame(rx_frame);
-  module_manager_->handleTempFrame(rx_frame);
+  bool handled = module_manager_->handleCellFrame(rx_frame);
+  handled = module_manager_->handleTempFrame(rx_frame) || handled;
+  if (!handled) {
+    return;
+  }
   datalayer.battery.status.CAN_battery_still_alive = CAN_STILL_ALIVE;
   datalayer_dirty_ = true;
 }
