@@ -52,30 +52,21 @@ class MQBModule {
     switch (block) {
       case 0:
         cell_voltages_[0] = (static_cast<uint16_t>(b[1] >> 4) + (static_cast<uint16_t>(b[2]) << 4) + 1000) * 0.001f;
-        cell_voltages_[1] =
-            (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
-        cell_voltages_[2] =
-            ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
-        cell_voltages_[3] =
-            (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[1] = (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[2] = ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
+        cell_voltages_[3] = (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
         break;
       case 1:
         cell_voltages_[4] = (static_cast<uint16_t>(b[1] >> 4) + (static_cast<uint16_t>(b[2]) << 4) + 1000) * 0.001f;
-        cell_voltages_[5] =
-            (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
-        cell_voltages_[6] =
-            ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
-        cell_voltages_[7] =
-            (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[5] = (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[6] = ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
+        cell_voltages_[7] = (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
         break;
       case 2:
         cell_voltages_[8] = (static_cast<uint16_t>(b[1] >> 4) + (static_cast<uint16_t>(b[2]) << 4) + 1000) * 0.001f;
-        cell_voltages_[9] =
-            (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
-        cell_voltages_[10] =
-            ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
-        cell_voltages_[11] =
-            (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[9] = (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[10] = ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
+        cell_voltages_[11] = (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
         break;
       case 3:
         cell_voltages_[12] = (static_cast<uint16_t>(b[1] >> 4) + (static_cast<uint16_t>(b[2]) << 4) + 1000) * 0.001f;
@@ -359,9 +350,9 @@ uint16_t estimate_soc_from_voltage(uint16_t pack_voltage_dV) {
   if (g_module_manager.seriesCells() == 0) {
     return 5000;
   }
-  const float avg_cell_mV = static_cast<float>(pack_voltage_dV * 10) / static_cast<float>(g_module_manager.seriesCells());
-  float soc = (avg_cell_mV - static_cast<float>(kSocMinCell_mV)) /
-              static_cast<float>(kSocMaxCell_mV - kSocMinCell_mV);
+  const float avg_cell_mV =
+      static_cast<float>(pack_voltage_dV * 10) / static_cast<float>(g_module_manager.seriesCells());
+  float soc = (avg_cell_mV - static_cast<float>(kSocMinCell_mV)) / static_cast<float>(kSocMaxCell_mV - kSocMinCell_mV);
   soc = std::clamp(soc, 0.0f, 1.0f);
   return static_cast<uint16_t>(std::lround(soc * 10000.0f));
 }
