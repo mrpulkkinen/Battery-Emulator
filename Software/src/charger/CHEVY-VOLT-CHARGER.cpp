@@ -1,7 +1,9 @@
-#include "../include.h"
-#ifdef CHEVYVOLT_CHARGER
-#include "../datalayer/datalayer.h"
 #include "CHEVY-VOLT-CHARGER.h"
+#include <Arduino.h>
+#include "../communication/can/comm_can.h"
+#include "../datalayer/datalayer.h"
+#include "../devboard/utils/logging.h"
+#include "CHARGERS.h"
 
 /* This implements Chevy Volt / Ampera charger support (2011-2015 model years).
  *
@@ -19,29 +21,8 @@
  * 2024 smaresca
  */
 
-/* CAN cycles and timers */
-static unsigned long previousMillis30ms = 0;    // 30ms cycle for keepalive frames
-static unsigned long previousMillis200ms = 0;   // 200ms cycle for commanding I/V targets
-static unsigned long previousMillis5000ms = 0;  // 5s status printout to serial
-
-enum CHARGER_MODES : uint8_t { MODE_DISABLED = 0, MODE_LV, MODE_HV, MODE_HVLV };
-
-//Actual content messages
-static CAN_frame charger_keepalive_frame = {.FD = false,
-                                            .ext_ID = false,
-                                            .DLC = 1,
-                                            .ID = 0x30E,  //one byte only, indicating enabled or disabled
-                                            .data = {MODE_DISABLED}};
-
-static CAN_frame charger_set_targets = {
-    .FD = false,
-    .ext_ID = false,
-    .DLC = 4,
-    .ID = 0x304,
-    .data = {0x40, 0x00, 0x00, 0x00}};  // data[0] is a static value, meaning unknown
-
 /* We are mostly sending out not receiving */
-void map_can_frame_to_variable_charger(CAN_frame rx_frame) {
+void ChevyVoltCharger::map_can_frame_to_variable(CAN_frame rx_frame) {
   uint16_t charger_stat_HVcur_temp = 0;
   uint16_t charger_stat_HVvol_temp = 0;
   uint16_t charger_stat_LVcur_temp = 0;
@@ -54,16 +35,16 @@ void map_can_frame_to_variable_charger(CAN_frame rx_frame) {
     case 0x212:
       datalayer.charger.CAN_charger_still_alive = CAN_STILL_ALIVE;  // Let system know charger is sending CAN
       charger_stat_HVcur_temp = (uint16_t)(rx_frame.data.u8[0] << 8 | rx_frame.data.u8[1]);
-      datalayer.charger.charger_stat_HVcur = (float)(charger_stat_HVcur_temp >> 3) * 0.05;
+      datalayer.charger.charger_stat_HVcur = (float)(charger_stat_HVcur_temp >> 3) * 0.05f;
 
       charger_stat_HVvol_temp = (uint16_t)((((rx_frame.data.u8[1] << 8 | rx_frame.data.u8[2])) >> 1) & 0x3ff);
-      datalayer.charger.charger_stat_HVvol = (float)(charger_stat_HVvol_temp) * .5;
+      datalayer.charger.charger_stat_HVvol = (float)(charger_stat_HVvol_temp) * .5f;
 
       charger_stat_LVcur_temp = (uint16_t)(((rx_frame.data.u8[2] << 8 | rx_frame.data.u8[3]) >> 1) & 0x00ff);
-      datalayer.charger.charger_stat_LVcur = (float)(charger_stat_LVcur_temp) * .2;
+      datalayer.charger.charger_stat_LVcur = (float)(charger_stat_LVcur_temp) * .2f;
 
       charger_stat_LVvol_temp = (uint16_t)(((rx_frame.data.u8[3] << 8 | rx_frame.data.u8[4]) >> 1) & 0x00ff);
-      datalayer.charger.charger_stat_LVvol = (float)(charger_stat_LVvol_temp) * .1;
+      datalayer.charger.charger_stat_LVvol = (float)(charger_stat_LVvol_temp) * .1f;
 
       break;
 
@@ -71,7 +52,7 @@ void map_can_frame_to_variable_charger(CAN_frame rx_frame) {
     case 0x30A:
       datalayer.charger.CAN_charger_still_alive = CAN_STILL_ALIVE;  // Let system know charger is sending CAN
       charger_stat_ACcur_temp = (uint16_t)((rx_frame.data.u8[0] << 8 | rx_frame.data.u8[1]) >> 4);
-      datalayer.charger.charger_stat_ACcur = (float)(charger_stat_ACcur_temp) * 0.2;
+      datalayer.charger.charger_stat_ACcur = (float)(charger_stat_ACcur_temp) * 0.2f;
 
       charger_stat_ACvol_temp = (uint16_t)(((rx_frame.data.u8[1] << 8 | rx_frame.data.u8[2]) >> 4) & 0x00ff);
       datalayer.charger.charger_stat_ACvol = (float)(charger_stat_ACvol_temp) * 2;
@@ -91,15 +72,11 @@ void map_can_frame_to_variable_charger(CAN_frame rx_frame) {
       datalayer.charger.CAN_charger_still_alive = CAN_STILL_ALIVE;  // Let system know charger is sending CAN
       break;
     default:
-#ifdef DEBUG_LOG
-      logging.printf("CAN Rcv unknown frame MsgID=%x\n", rx_frame.MsgID);
-#endif
       break;
   }
 }
 
-void transmit_can_charger() {
-  unsigned long currentMillis = millis();
+void ChevyVoltCharger::transmit_can(unsigned long currentMillis) {
   uint16_t Vol_temp = 0;
 
   uint16_t setpoint_HV_VDC = floor(datalayer.charger.charger_setpoint_HV_VDC);
@@ -127,7 +104,7 @@ void transmit_can_charger() {
 
     charger_keepalive_frame.data.u8[0] = charger_mode;
 
-    transmit_can_frame(&charger_keepalive_frame, can_config.charger);
+    transmit_can_frame(&charger_keepalive_frame);
   }
 
   /* Send current targets every 200ms */
@@ -164,19 +141,16 @@ void transmit_can_charger() {
     /* LSB of the voltage command. Then MSB LSB is divided by 2 */
     charger_set_targets.data.u8[3] = lowByte(Vol_temp);
 
-    transmit_can_frame(&charger_set_targets, can_config.charger);
+    transmit_can_frame(&charger_set_targets);
   }
 
-#ifdef DEBUG_LOG
   /* Serial echo every 5s of charger stats */
   if (currentMillis - previousMillis5000ms >= INTERVAL_5_S) {
     previousMillis5000ms = currentMillis;
-    logging.printf("Charger AC in IAC=%fA VAC=%fV\n", charger_stat_ACcur, charger_stat_ACvol);
-    logging.printf("Charger HV out IDC=%fA VDC=%fV\n", charger_stat_HVcur, charger_stat_HVvol);
-    logging.printf("Charger LV out IDC=%fA VDC=%fV\n", charger_stat_LVcur, charger_stat_LVvol);
+    logging.printf("Charger AC in IAC=%fA VAC=%fV\n", (double)AC_input_current(), (double)AC_input_voltage());
+    logging.printf("Charger HV out IDC=%fA VDC=%fV\n", (double)HVDC_output_current(), (double)HVDC_output_voltage());
+    logging.printf("Charger LV out IDC=%fA VDC=%fV\n", (double)LVDC_output_current(), (double)LVDC_output_voltage());
     logging.printf("Charger mode=%s\n", (charger_mode > MODE_DISABLED) ? "Enabled" : "Disabled");
     logging.printf("Charger HVset=%uV,%uA finishCurrent=%uA\n", setpoint_HV_VDC, setpoint_HV_IDC, setpoint_HV_IDC_END);
   }
-#endif
 }
-#endif

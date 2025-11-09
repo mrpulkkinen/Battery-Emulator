@@ -1,38 +1,11 @@
-#include "../include.h"
-#ifdef SONO_BATTERY
+#include "SONO-BATTERY.h"
+#include <cstring>  //For unit test
+#include "../communication/can/comm_can.h"
 #include "../datalayer/datalayer.h"
 #include "../devboard/utils/events.h"
-#include "SONO-BATTERY.h"
 
-/* Do not change code below unless you are sure what you are doing */
-static unsigned long previousMillis100 = 0;   // will store last time a 100ms CAN Message was send
-static unsigned long previousMillis1000 = 0;  // will store last time a 1000ms CAN Message was send
-
-static uint8_t seconds = 0;
-static uint8_t functionalsafetybitmask = 0;
-static uint16_t batteryVoltage = 3700;
-static uint16_t allowedDischargePower = 0;
-static uint16_t allowedChargePower = 0;
-static uint16_t CellVoltMax_mV = 0;
-static uint16_t CellVoltMin_mV = 0;
-static int16_t batteryAmps = 0;
-static int16_t temperatureMin = 0;
-static int16_t temperatureMax = 0;
-static uint8_t batterySOH = 99;
-static uint8_t realSOC = 99;
-
-CAN_frame SONO_400 = {.FD = false,  //Message of Vehicle Command, 100ms
-                      .ext_ID = false,
-                      .DLC = 8,
-                      .ID = 0x400,
-                      .data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
-CAN_frame SONO_401 = {.FD = false,  //Message of Vehicle Date, 1000ms
-                      .ext_ID = false,
-                      .DLC = 8,
-                      .ID = 0x400,
-                      .data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
-
-void update_values_battery() {  //This function maps all the values fetched via CAN to the correct parameters used for modbus
+void SonoBattery::
+    update_values() {  //This function maps all the values fetched via CAN to the correct parameters used for modbus
 
   datalayer.battery.status.real_soc = (realSOC * 100);  //increase SOC range from 0-100 -> 100.00
 
@@ -60,7 +33,7 @@ void update_values_battery() {  //This function maps all the values fetched via 
   datalayer.battery.status.temperature_max_dC = temperatureMax;
 }
 
-void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
+void SonoBattery::handle_incoming_can_frame(CAN_frame rx_frame) {
   switch (rx_frame.ID) {
     case 0x100:
       datalayer.battery.status.CAN_battery_still_alive = CAN_STILL_ALIVE;
@@ -137,9 +110,7 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
       break;
   }
 }
-void transmit_can_battery() {
-  unsigned long currentMillis = millis();
-
+void SonoBattery::transmit_can(unsigned long currentMillis) {
   // Send 100ms CAN Message
   if (currentMillis - previousMillis100 >= INTERVAL_100_MS) {
     previousMillis100 = currentMillis;
@@ -149,7 +120,7 @@ void transmit_can_battery() {
     if (datalayer.battery.status.bms_status == FAULT) {
       SONO_400.data.u8[0] = 0x14;  //Charging DISABLED
     }
-    transmit_can_frame(&SONO_400, can_config.battery);
+    transmit_can_frame(&SONO_400);
   }
   // Send 1000ms CAN Message
   if (currentMillis - previousMillis1000 >= INTERVAL_1_S) {
@@ -157,21 +128,22 @@ void transmit_can_battery() {
 
     //Time and date
     //Let's see if the battery is happy with just getting seconds incrementing
-    SONO_401.data.u8[0] = 2025;     //Year
+    SONO_401.data.u8[0] = 25;       //Year
     SONO_401.data.u8[1] = 1;        //Month
     SONO_401.data.u8[2] = 1;        //Day
     SONO_401.data.u8[3] = 12;       //Hour
     SONO_401.data.u8[4] = 15;       //Minute
     SONO_401.data.u8[5] = seconds;  //Second
     seconds = (seconds + 1) % 61;
-    transmit_can_frame(&SONO_401, can_config.battery);
+    transmit_can_frame(&SONO_401);
   }
 }
 
-void setup_battery(void) {  // Performs one time setup at startup
-  strncpy(datalayer.system.info.battery_protocol, "Sono Motors Sion 64kWh LFP ", 63);
+void SonoBattery::setup(void) {  // Performs one time setup at startup
+  strncpy(datalayer.system.info.battery_protocol, Name, 63);
   datalayer.system.info.battery_protocol[63] = '\0';
   datalayer.battery.info.number_of_cells = 96;
+  datalayer.system.status.battery_allows_contactor_closing = true;
   datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_DV;
   datalayer.battery.info.min_design_voltage_dV = MIN_PACK_VOLTAGE_DV;
   datalayer.battery.info.max_cell_voltage_mV = MAX_CELL_VOLTAGE_MV;
@@ -179,5 +151,3 @@ void setup_battery(void) {  // Performs one time setup at startup
   datalayer.battery.info.max_cell_voltage_deviation_mV = MAX_CELL_DEVIATION_MV;
   datalayer.battery.info.chemistry = battery_chemistry_enum::LFP;
 }
-
-#endif

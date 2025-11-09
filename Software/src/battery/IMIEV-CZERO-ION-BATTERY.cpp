@@ -1,42 +1,15 @@
-#include "../include.h"
-#ifdef IMIEV_CZERO_ION_BATTERY
+#include "IMIEV-CZERO-ION-BATTERY.h"
+#include <cstring>  //for unit tests
+#include "../communication/can/comm_can.h"
 #include "../datalayer/datalayer.h"
 #include "../devboard/utils/events.h"
-#include "IMIEV-CZERO-ION-BATTERY.h"
+#include "../devboard/utils/logging.h"
 
 //Code still work in progress, TODO:
 //Figure out if CAN messages need to be sent to keep the system happy?
 
-/* Do not change code below unless you are sure what you are doing */
-static uint8_t errorCode = 0;  //stores if we have an error code active from battery control logic
-static uint8_t BMU_Detected = 0;
-static uint8_t CMU_Detected = 0;
-
-static unsigned long previousMillis10 = 0;   // will store last time a 10ms CAN Message was sent
-static unsigned long previousMillis100 = 0;  // will store last time a 100ms CAN Message was sent
-
-static int pid_index = 0;
-static int cmu_id = 0;
-static int voltage_index = 0;
-static int temp_index = 0;
-static uint8_t BMU_SOC = 0;
-static int temp_value = 0;
-static double temp1 = 0;
-static double temp2 = 0;
-static double temp3 = 0;
-static double voltage1 = 0;
-static double voltage2 = 0;
-static double BMU_Current = 0;
-static double BMU_PackVoltage = 0;
-static double BMU_Power = 0;
-static double cell_voltages[88];      //array with all the cellvoltages
-static double cell_temperatures[88];  //array with all the celltemperatures
-static double max_volt_cel = 3.70;
-static double min_volt_cel = 3.70;
-static double max_temp_cel = 20.00;
-static double min_temp_cel = 19.00;
-
-void update_values_battery() {  //This function maps all the values fetched via CAN to the correct parameters used for modbus
+void ImievCZeroIonBattery::
+    update_values() {  //This function maps all the values fetched via CAN to the correct parameters used for modbus
   datalayer.battery.status.real_soc = (uint16_t)(BMU_SOC * 100);  //increase BMU_SOC range from 0-100 -> 100.00
 
   datalayer.battery.status.voltage_dV = (uint16_t)(BMU_PackVoltage * 10);  // Multiply by 10 and cast to uint16_t
@@ -47,9 +20,11 @@ void update_values_battery() {  //This function maps all the values fetched via 
       (static_cast<double>(datalayer.battery.status.real_soc) / 10000) * datalayer.battery.info.total_capacity_Wh);
 
   //We do not know the max charge/discharge power is sent by the battery. We hardcode value for now.
-  datalayer.battery.status.max_charge_power_W = 10000;  // 10kW   //TODO: Fix when CAN is decoded
+  datalayer.battery.status.max_charge_power_W =
+      datalayer.battery.status.override_charge_power_W;  //TODO: Fix when CAN is decoded
 
-  datalayer.battery.status.max_discharge_power_W = 10000;  // 10kW   //TODO: Fix when CAN is decoded
+  datalayer.battery.status.max_discharge_power_W =
+      datalayer.battery.status.override_discharge_power_W;  //TODO: Fix when CAN is decoded
 
   static int n = sizeof(cell_voltages) / sizeof(cell_voltages[0]);
   max_volt_cel = cell_voltages[0];  // Initialize max with the first element of the array
@@ -75,7 +50,7 @@ void update_values_battery() {  //This function maps all the values fetched via 
   min_temp_cel = cell_temperatures[0];  // Initialize min with the first element of the array
   for (int i = 1; i < m; i++) {
     if (cell_temperatures[i] < min_temp_cel) {
-      if (min_temp_cel != -50.00) {           //-50.00 means this sensor not connected
+      if (min_temp_cel != -50.00f) {          //-50.00 means this sensor not connected
         min_temp_cel = cell_temperatures[i];  // Update max if we find a smaller element
       }
     }
@@ -86,11 +61,11 @@ void update_values_battery() {  //This function maps all the values fetched via 
     datalayer.battery.status.cell_voltages_mV[i] = (uint16_t)(cell_voltages[i] * 1000);
   }
   datalayer.battery.info.number_of_cells = 88;
-  if (max_volt_cel > 2.2) {  // Only update cellvoltage when we have a value
+  if (max_volt_cel > 2.2f) {  // Only update cellvoltage when we have a value
     datalayer.battery.status.cell_max_voltage_mV = (uint16_t)(max_volt_cel * 1000);
   }
 
-  if (min_volt_cel > 2.2) {  // Only update cellvoltage when we have a value
+  if (min_volt_cel > 2.2f) {  // Only update cellvoltage when we have a value
     datalayer.battery.status.cell_min_voltage_mV = (uint16_t)(min_volt_cel * 1000);
   }
 
@@ -103,33 +78,12 @@ void update_values_battery() {  //This function maps all the values fetched via 
   }
 
   if (!BMU_Detected) {
-#ifdef DEBUG_LOG
     logging.println("BMU not detected, check wiring!");
-#endif
+    //TODO: Raise event
   }
-
-#ifdef DEBUG_LOG
-  logging.println("Battery Values");
-  logging.print("BMU SOC: ");
-  logging.print(BMU_SOC);
-  logging.print(" BMU Current: ");
-  logging.print(BMU_Current);
-  logging.print(" BMU Battery Voltage: ");
-  logging.print(BMU_PackVoltage);
-  logging.print(" BMU_Power: ");
-  logging.print(BMU_Power);
-  logging.print(" Cell max voltage: ");
-  logging.print(max_volt_cel);
-  logging.print(" Cell min voltage: ");
-  logging.print(min_volt_cel);
-  logging.print(" Cell max temp: ");
-  logging.print(max_temp_cel);
-  logging.print(" Cell min temp: ");
-  logging.println(min_temp_cel);
-#endif
 }
 
-void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
+void ImievCZeroIonBattery::handle_incoming_can_frame(CAN_frame rx_frame) {
   switch (rx_frame.ID) {
     case 0x374:  //BMU message, 10ms - SOC
       datalayer.battery.status.CAN_battery_still_alive = CAN_STILL_ALIVE;
@@ -150,8 +104,8 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
       break;
     case 0x373:  //BMU message, 100ms - Pack Voltage and current
       datalayer.battery.status.CAN_battery_still_alive = CAN_STILL_ALIVE;
-      BMU_Current = ((((((rx_frame.data.u8[2] * 256.0) + rx_frame.data.u8[3])) - 32768)) * 0.01);
-      BMU_PackVoltage = ((rx_frame.data.u8[4] * 256.0 + rx_frame.data.u8[5]) * 0.1);
+      BMU_Current = ((((((rx_frame.data.u8[2] * 256.0f) + rx_frame.data.u8[3])) - 32768)) * 0.01f);
+      BMU_PackVoltage = ((rx_frame.data.u8[4] * 256.0f + rx_frame.data.u8[5]) * 0.1f);
       BMU_Power = (BMU_Current * BMU_PackVoltage);
       break;
     case 0x6e1:  //BMU message, 25ms - Battery temperatures and voltages
@@ -166,17 +120,17 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
       cmu_id = (rx_frame.data.u8[0] & 0x0f);
       //
       if (rx_frame.data.u8[1] != 0) {  // Only update temperatures if value is available
-        temp1 = rx_frame.data.u8[1] - 50.0;
+        temp1 = rx_frame.data.u8[1] - 50.0f;
       }
       if (rx_frame.data.u8[2] != 0) {
-        temp2 = rx_frame.data.u8[1] - 50.0;
+        temp2 = rx_frame.data.u8[1] - 50.0f;
       }
       if (rx_frame.data.u8[3] != 0) {
-        temp3 = rx_frame.data.u8[1] - 50.0;
+        temp3 = rx_frame.data.u8[1] - 50.0f;
       }
 
-      voltage1 = (((rx_frame.data.u8[4] * 256.0 + rx_frame.data.u8[5]) * 0.005) + 2.1);
-      voltage2 = (((rx_frame.data.u8[6] * 256.0 + rx_frame.data.u8[7]) * 0.005) + 2.1);
+      voltage1 = (((rx_frame.data.u8[4] * 256.0f + rx_frame.data.u8[5]) * 0.005f) + 2.1f);
+      voltage2 = (((rx_frame.data.u8[6] * 256.0f + rx_frame.data.u8[7]) * 0.005f) + 2.1f);
 
       voltage_index = ((cmu_id - 1) * 8 + (2 * pid_index));
       temp_index = ((cmu_id - 1) * 6 + (2 * pid_index));
@@ -185,10 +139,10 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
         temp_index -= 3;
       }
 
-      if (voltage1 > 2.2) {  // Only update cellvoltages incase we have a value
+      if (voltage1 > 2.2f) {  // Only update cellvoltages incase we have a value
         cell_voltages[voltage_index] = voltage1;
       }
-      if (voltage2 > 2.2) {
+      if (voltage2 > 2.2f) {
         cell_voltages[voltage_index + 1] = voltage2;
       }
 
@@ -207,30 +161,23 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
   }
 }
 
-void transmit_can_battery() {
-  unsigned long currentMillis = millis();
+void ImievCZeroIonBattery::transmit_can(unsigned long currentMillis) {
+
   // Send 100ms CAN Message
   if (currentMillis - previousMillis100 >= INTERVAL_100_MS) {
-    // Check if sending of CAN messages has been delayed too much.
-    if ((currentMillis - previousMillis100 >= INTERVAL_100_MS_DELAYED) && (currentMillis > BOOTUP_TIME)) {
-      set_event(EVENT_CAN_OVERRUN, (currentMillis - previousMillis100));
-    } else {
-      clear_event(EVENT_CAN_OVERRUN);
-    }
     previousMillis100 = currentMillis;
 
     // Send CAN goes here...
   }
 }
 
-void setup_battery(void) {  // Performs one time setup at startup
-  strncpy(datalayer.system.info.battery_protocol, "I-Miev / C-Zero / Ion Triplet", 63);
+void ImievCZeroIonBattery::setup(void) {  // Performs one time setup at startup
+  strncpy(datalayer.system.info.battery_protocol, Name, 63);
   datalayer.system.info.battery_protocol[63] = '\0';
   datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_DV;
   datalayer.battery.info.min_design_voltage_dV = MIN_PACK_VOLTAGE_DV;
   datalayer.battery.info.max_cell_voltage_mV = MAX_CELL_VOLTAGE_MV;
   datalayer.battery.info.min_cell_voltage_mV = MIN_CELL_VOLTAGE_MV;
   datalayer.battery.info.max_cell_voltage_deviation_mV = MAX_CELL_DEVIATION_MV;
+  datalayer.system.status.battery_allows_contactor_closing = true;
 }
-
-#endif

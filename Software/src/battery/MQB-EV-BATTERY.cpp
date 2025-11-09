@@ -1,20 +1,13 @@
-#include "../include.h"
-#ifdef MQB_EV_BATTERY
+#include "MQB-EV-BATTERY.h"
 
+#include <Arduino.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
-#include "../communication/can/comm_can.h"
-#include "../datalayer/datalayer.h"
-#include "MQB-EV-BATTERY.h"
 
-/*
- * Portions of the module decoding logic in this file are adapted from the
- * VWBMSV2 project by Simp ECO Engineering (MIT License, 2019). The original
- * implementation targets a Teensy-based controller and has been reshaped to fit
- * the Battery-Emulator architecture and CAN abstractions.
- */
+#include "../communication/can/comm_can.h"
 
 namespace {
 
@@ -35,6 +28,8 @@ constexpr uint16_t kDefaultMaxDischargeA = 2500;  // 250 A
 constexpr uint16_t kDefaultMaxChargeA = 1250;     // 125 A
 constexpr uint32_t kDefaultMaxDischargePowerW = 80000;
 constexpr uint32_t kDefaultMaxChargePowerW = 45000;
+
+}  // namespace
 
 class MQBModule {
  public:
@@ -58,13 +53,15 @@ class MQBModule {
         break;
       case 1:
         cell_voltages_[4] = (static_cast<uint16_t>(b[1] >> 4) + (static_cast<uint16_t>(b[2]) << 4) + 1000) * 0.001f;
-        cell_voltages_[5] = (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[5] =
+            (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
         cell_voltages_[6] = ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
         cell_voltages_[7] = (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
         break;
       case 2:
         cell_voltages_[8] = (static_cast<uint16_t>(b[1] >> 4) + (static_cast<uint16_t>(b[2]) << 4) + 1000) * 0.001f;
-        cell_voltages_[9] = (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[9] =
+            (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
         cell_voltages_[10] = ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
         cell_voltages_[11] = (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
         break;
@@ -88,57 +85,55 @@ class MQBModule {
       if (b[0] < 0xDF) {
         temperatures_[0] = static_cast<float>(b[0]) * 0.5f - 43.0f;
       } else {
-        temperatures_[0] = static_cast<float>(b[3]) * 0.5f - 43.0f;
+        temperatures_[0] = kInvalidTemperature;
       }
-      temperatures_[1] = (b[4] < 0xF0) ? (static_cast<float>(b[4]) * 0.5f - 43.0f) : kInvalidTemperature;
-      temperatures_[2] = (b[5] < 0xF0) ? (static_cast<float>(b[5]) * 0.5f - 43.0f) : kInvalidTemperature;
     }
-    present_ = true;
-    last_update_ms_ = millis();
+
+    if (b[5] != 0xFF) {
+      temperatures_[1] = static_cast<float>(b[5]) * 0.5f - 40.0f;
+    } else {
+      temperatures_[1] = kInvalidTemperature;
+    }
   }
 
   void decodeTempFrameType2(const CAN_frame& frame) {
     const uint8_t* b = frame.data.u8;
-    const uint16_t raw = static_cast<uint16_t>(((b[5] & 0x0F) << 4) | ((b[4] & 0xF0) >> 4));
-    temperatures_[0] = static_cast<float>(raw) * 0.5f - 40.0f;
-    present_ = true;
-    last_update_ms_ = millis();
-  }
-
-  bool isPresent() const { return present_; }
-
-  uint32_t lastUpdateMs() const { return last_update_ms_; }
-
-  uint8_t validCellCount() const {
-    uint8_t count = 0;
-    for (float v : cell_voltages_) {
-      if (v > kIgnoreCellVoltage && v < kMaxValidCellVoltage) {
-        count++;
-      }
+    if (b[0] != 0xFF) {
+      temperatures_[2] = static_cast<float>(b[0]) * 0.5f - 40.0f;
+    } else {
+      temperatures_[2] = kInvalidTemperature;
     }
-    return count;
   }
 
   float moduleVoltage() const {
-    float sum = 0.0f;
-    for (float v : cell_voltages_) {
-      if (v > kIgnoreCellVoltage && v < kMaxValidCellVoltage) {
-        sum += v;
-      }
-    }
-    return sum;
-  }
-
-  float averageCellVoltage() const {
-    float sum = 0.0f;
+    float total = 0.0f;
     uint8_t count = 0;
     for (float v : cell_voltages_) {
       if (v > kIgnoreCellVoltage && v < kMaxValidCellVoltage) {
-        sum += v;
+        total += v;
         count++;
       }
     }
-    return (count > 0) ? (sum / static_cast<float>(count)) : 0.0f;
+    if (count == 0) {
+      return 0.0f;
+    }
+    return total;
+  }
+
+  uint8_t validCellCount() const {
+    return static_cast<uint8_t>(std::count_if(cell_voltages_.begin(), cell_voltages_.end(), [](float voltage) {
+      return voltage > kIgnoreCellVoltage && voltage < kMaxValidCellVoltage;
+    }));
+  }
+
+  float minCellVoltage() const {
+    float min_v = kMaxValidCellVoltage;
+    for (float v : cell_voltages_) {
+      if (v < min_v && v > kIgnoreCellVoltage) {
+        min_v = v;
+      }
+    }
+    return min_v;
   }
 
   float maxCellVoltage() const {
@@ -151,50 +146,56 @@ class MQBModule {
     return max_v;
   }
 
-  float minCellVoltage() const {
-    float min_v = kMaxValidCellVoltage;
-    bool found = false;
+  float averageCellVoltage() const {
+    float total = 0.0f;
+    uint8_t count = 0;
     for (float v : cell_voltages_) {
-      if (v > kIgnoreCellVoltage && v < min_v) {
-        min_v = v;
-        found = true;
+      if (v > kIgnoreCellVoltage && v < kMaxValidCellVoltage) {
+        total += v;
+        count++;
       }
     }
-    return found ? min_v : 0.0f;
+    if (count == 0) {
+      return 0.0f;
+    }
+    return total / static_cast<float>(count);
+  }
+
+  float minTemperature() const {
+    float min_t = std::numeric_limits<float>::max();
+    for (float t : temperatures_) {
+      if (t != kInvalidTemperature && t < min_t) {
+        min_t = t;
+      }
+    }
+    return min_t;
   }
 
   float maxTemperature() const {
     float max_t = kInvalidTemperature;
     for (float t : temperatures_) {
-      if (t > max_t) {
+      if (t != kInvalidTemperature && t > max_t) {
         max_t = t;
       }
     }
     return max_t;
   }
 
-  float minTemperature() const {
-    float min_t = std::numeric_limits<float>::max();
-    bool found = false;
-    for (float t : temperatures_) {
-      if (t > kInvalidTemperature + 1.0f && t < min_t) {
-        min_t = t;
-        found = true;
-      }
-    }
-    return found ? min_t : kInvalidTemperature;
-  }
-
   void copyCellVoltages(uint16_t& cursor, uint16_t* dest, size_t max_cells) const {
     for (float v : cell_voltages_) {
-      if (v > kIgnoreCellVoltage && v < kMaxValidCellVoltage && cursor < max_cells) {
-        dest[cursor++] = static_cast<uint16_t>(std::lround(v * 1000.0f));
+      if (cursor >= max_cells) {
+        return;
       }
+      dest[cursor++] = static_cast<uint16_t>(std::lround(v * 1000.0f));
     }
   }
 
+  bool isPresent() const { return present_; }
+
+  uint32_t lastUpdateMs() const { return last_update_ms_; }
+
  private:
-  std::array<float, 13> cell_voltages_{};
+  std::array<float, MQB_EV_CELLS_PER_MODULE> cell_voltages_{};
   std::array<float, 3> temperatures_{};
   bool present_ = false;
   uint32_t last_update_ms_ = 0;
@@ -303,14 +304,12 @@ class MQBModuleManager {
   }
 
   float packVoltage() const { return pack_voltage_V_; }
-  float avgCellVoltage() const { return avg_cell_voltage_V_; }
   float minCellVoltage() const { return min_cell_voltage_V_; }
   float maxCellVoltage() const { return max_cell_voltage_V_; }
   float minTemperature() const { return min_temperature_C_; }
   float maxTemperature() const { return max_temperature_C_; }
   uint16_t seriesCells() const { return series_cells_; }
   uint8_t moduleCount() const { return module_count_; }
-  uint32_t lastActivity() const { return last_activity_ms_; }
 
  private:
   std::array<MQBModule, MQB_EV_MAX_MODULES + 1> modules_{};
@@ -325,56 +324,82 @@ class MQBModuleManager {
   uint32_t last_activity_ms_ = 0;
 };
 
-MQBModuleManager g_module_manager;
-unsigned long g_last_poll_ms = 0;
-bool g_poll_toggle = false;
-bool g_datalayer_dirty = false;
+MqbEvBattery::MqbEvBattery() : CanBattery(), module_manager_(new MQBModuleManager()) {
+  poll_frame_a_ = {.FD = false,
+                   .ext_ID = false,
+                   .DLC = 8,
+                   .ID = 0x0BA,
+                   .data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
 
-CAN_frame MQB_POLL_A = {.FD = false,
-                        .ext_ID = false,
-                        .DLC = 8,
-                        .ID = 0x0BA,
-                        .data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
-
-CAN_frame MQB_POLL_B = {.FD = false,
-                        .ext_ID = false,
-                        .DLC = 8,
-                        .ID = 0x0BA,
-                        .data = {0x45, 0x01, 0x28, 0x00, 0x00, 0x00, 0x00, 0x30}};
-
-uint16_t clamp_uint16(uint32_t value, uint16_t max_value) {
-  return static_cast<uint16_t>(std::min<uint32_t>(value, max_value));
+  poll_frame_b_ = {.FD = false,
+                   .ext_ID = false,
+                   .DLC = 8,
+                   .ID = 0x0BA,
+                   .data = {0x45, 0x01, 0x28, 0x00, 0x00, 0x00, 0x00, 0x30}};
 }
 
-uint16_t estimate_soc_from_voltage(uint16_t pack_voltage_dV) {
-  if (g_module_manager.seriesCells() == 0) {
-    return 5000;
+void MqbEvBattery::setup(void) {
+  strncpy(datalayer.system.info.battery_protocol, Name, sizeof(datalayer.system.info.battery_protocol) - 1);
+  datalayer.system.info.battery_protocol[sizeof(datalayer.system.info.battery_protocol) - 1] = '\0';
+
+  datalayer.battery.info.max_design_voltage_dV = MQB_EV_MAX_PACK_VOLTAGE_dV;
+  datalayer.battery.info.min_design_voltage_dV = MQB_EV_MIN_PACK_VOLTAGE_dV;
+  datalayer.battery.info.max_cell_voltage_mV = MQB_EV_MAX_CELL_VOLTAGE_mV;
+  datalayer.battery.info.min_cell_voltage_mV = MQB_EV_MIN_CELL_VOLTAGE_mV;
+  datalayer.battery.info.max_cell_voltage_deviation_mV = MQB_EV_MAX_CELL_DEVIATION_mV;
+  datalayer.battery.info.chemistry = battery_chemistry_enum::NMC;
+  datalayer.battery.info.number_of_cells = MQB_EV_MAX_MODULES * MQB_EV_CELLS_PER_MODULE;
+
+  datalayer.battery.status.CAN_battery_still_alive = 0;
+  datalayer_dirty_ = true;
+}
+
+void MqbEvBattery::handle_incoming_can_frame(CAN_frame rx_frame) {
+  module_manager_->handleCellFrame(rx_frame);
+  module_manager_->handleTempFrame(rx_frame);
+  datalayer.battery.status.CAN_battery_still_alive = CAN_STILL_ALIVE;
+  datalayer_dirty_ = true;
+}
+
+void MqbEvBattery::update_values() {
+  publish_pack_state();
+  datalayer_dirty_ = false;
+}
+
+void MqbEvBattery::transmit_can(unsigned long currentMillis) {
+  if (currentMillis - last_poll_ms_ < kCellPollIntervalMs) {
+    return;
   }
-  const float avg_cell_mV =
-      static_cast<float>(pack_voltage_dV * 10) / static_cast<float>(g_module_manager.seriesCells());
-  float soc = (avg_cell_mV - static_cast<float>(kSocMinCell_mV)) / static_cast<float>(kSocMaxCell_mV - kSocMinCell_mV);
-  soc = std::clamp(soc, 0.0f, 1.0f);
-  return static_cast<uint16_t>(std::lround(soc * 10000.0f));
+
+  last_poll_ms_ = currentMillis;
+  poll_toggle_ = !poll_toggle_;
+
+  if (poll_toggle_) {
+    transmit_can_frame(&poll_frame_a_);
+  } else {
+    transmit_can_frame(&poll_frame_b_);
+  }
 }
 
-void publish_pack_state() {
-  g_module_manager.refreshAggregates();
+void MqbEvBattery::publish_pack_state() {
+  module_manager_->refreshAggregates();
 
-  const uint16_t series_cells = g_module_manager.seriesCells();
+  const uint16_t series_cells = module_manager_->seriesCells();
   if (series_cells > 0) {
-    datalayer.battery.info.number_of_cells = std::min<uint16_t>(series_cells, MAX_AMOUNT_CELLS);
+    datalayer.battery.info.number_of_cells =
+        std::min<uint16_t>(series_cells, static_cast<uint16_t>(MAX_AMOUNT_CELLS));
   }
 
-  const uint16_t pack_voltage_dV = static_cast<uint16_t>(std::lround(g_module_manager.packVoltage() * 10.0f));
+  const uint16_t pack_voltage_dV = static_cast<uint16_t>(std::lround(module_manager_->packVoltage() * 10.0f));
   datalayer.battery.status.voltage_dV = pack_voltage_dV;
   datalayer.battery.status.cell_min_voltage_mV =
-      static_cast<uint16_t>(std::lround(g_module_manager.minCellVoltage() * 1000.0f));
+      static_cast<uint16_t>(std::lround(module_manager_->minCellVoltage() * 1000.0f));
   datalayer.battery.status.cell_max_voltage_mV =
-      static_cast<uint16_t>(std::lround(g_module_manager.maxCellVoltage() * 1000.0f));
+      static_cast<uint16_t>(std::lround(module_manager_->maxCellVoltage() * 1000.0f));
   datalayer.battery.status.temperature_min_dC =
-      static_cast<int16_t>(std::lround(g_module_manager.minTemperature() * 10.0f));
+      static_cast<int16_t>(std::lround(module_manager_->minTemperature() * 10.0f));
   datalayer.battery.status.temperature_max_dC =
-      static_cast<int16_t>(std::lround(g_module_manager.maxTemperature() * 10.0f));
+      static_cast<int16_t>(std::lround(module_manager_->maxTemperature() * 10.0f));
 
   datalayer.battery.status.real_soc = estimate_soc_from_voltage(pack_voltage_dV);
   datalayer.battery.status.reported_soc = datalayer.battery.status.real_soc;
@@ -392,57 +417,18 @@ void publish_pack_state() {
   datalayer.battery.status.active_power_W = 0;
 
   std::fill_n(datalayer.battery.status.cell_voltages_mV, MAX_AMOUNT_CELLS, 0);
-  g_module_manager.copyCellVoltages(datalayer.battery.status.cell_voltages_mV, MAX_AMOUNT_CELLS);
+  module_manager_->copyCellVoltages(datalayer.battery.status.cell_voltages_mV, MAX_AMOUNT_CELLS);
 
-  datalayer.system.status.battery_allows_contactor_closing = (g_module_manager.moduleCount() > 0);
+  datalayer.system.status.battery_allows_contactor_closing = (module_manager_->moduleCount() > 0);
 }
 
-}  // namespace
-
-void update_values_battery() {
-  if (!g_datalayer_dirty) {
-    publish_pack_state();
-    return;
+uint16_t MqbEvBattery::estimate_soc_from_voltage(uint16_t pack_voltage_dV) const {
+  const uint16_t series_cells = module_manager_->seriesCells();
+  if (series_cells == 0) {
+    return 5000;
   }
-  publish_pack_state();
-  g_datalayer_dirty = false;
+  const float avg_cell_mV = static_cast<float>(pack_voltage_dV * 10) / static_cast<float>(series_cells);
+  float soc = (avg_cell_mV - static_cast<float>(kSocMinCell_mV)) / static_cast<float>(kSocMaxCell_mV - kSocMinCell_mV);
+  soc = std::clamp(soc, 0.0f, 1.0f);
+  return static_cast<uint16_t>(std::lround(soc * 10000.0f));
 }
-
-void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
-  g_module_manager.handleCellFrame(rx_frame);
-  g_module_manager.handleTempFrame(rx_frame);
-  datalayer.battery.status.CAN_battery_still_alive = CAN_STILL_ALIVE;
-  g_datalayer_dirty = true;
-}
-
-void transmit_can_battery() {
-  const unsigned long now = millis();
-  if (now - g_last_poll_ms < kCellPollIntervalMs) {
-    return;
-  }
-  g_last_poll_ms = now;
-  g_poll_toggle = !g_poll_toggle;
-  if (g_poll_toggle) {
-    transmit_can_frame(&MQB_POLL_A, can_config.battery);
-  } else {
-    transmit_can_frame(&MQB_POLL_B, can_config.battery);
-  }
-}
-
-void setup_battery(void) {
-  strncpy(datalayer.system.info.battery_protocol, "Volkswagen MQB e-Golf modules", 63);
-  datalayer.system.info.battery_protocol[63] = '\0';
-
-  datalayer.battery.info.max_design_voltage_dV = MQB_EV_MAX_PACK_VOLTAGE_dV;
-  datalayer.battery.info.min_design_voltage_dV = MQB_EV_MIN_PACK_VOLTAGE_dV;
-  datalayer.battery.info.max_cell_voltage_mV = MQB_EV_MAX_CELL_VOLTAGE_mV;
-  datalayer.battery.info.min_cell_voltage_mV = MQB_EV_MIN_CELL_VOLTAGE_mV;
-  datalayer.battery.info.max_cell_voltage_deviation_mV = MQB_EV_MAX_CELL_DEVIATION_mV;
-  datalayer.battery.info.chemistry = battery_chemistry_enum::NMC;
-  datalayer.battery.info.number_of_cells = MQB_EV_MAX_MODULES * MQB_EV_CELLS_PER_MODULE;
-
-  datalayer.battery.status.CAN_battery_still_alive = 0;
-  g_datalayer_dirty = true;
-}
-
-#endif

@@ -1,8 +1,8 @@
-#include "../include.h"
-#ifdef FOXESS_BATTERY
+#include "FOXESS-BATTERY.h"
+#include <cstring>  //For unit test
+#include "../communication/can/comm_can.h"
 #include "../datalayer/datalayer.h"
 #include "../devboard/utils/events.h"
-#include "FOXESS-BATTERY.h"
 
 /*
 Can bus @ 500k - all Extended ID, little endian
@@ -12,81 +12,8 @@ TODO:
 - Check that current is signed right way
 */
 
-/* Do not change code below unless you are sure what you are doing */
-static unsigned long previousMillis500 = 0;  // will store last time a 500ms CAN Message was send
-
-CAN_frame FOX_1871 = {.FD = false,  //Inverter request data from battery. Content varies depending on state
-                      .ext_ID = true,
-                      .DLC = 8,
-                      .ID = 0x1871,
-                      .data = {0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00}};
-static uint32_t total_watt_hours = 0;
-static uint16_t max_charge_power_dA = 0;
-static uint16_t max_discharge_power_dA = 0;
-static uint16_t cut_mv_max = 0;
-static uint16_t cut_mv_min = 0;
-static uint16_t cycle_count = 0;
-static uint16_t max_ac_voltage = 0;
-static uint16_t cellvoltages_mV[128] = {0};
-static int16_t temperature_average = 0;
-static int16_t pack1_current_sensor = 0;
-static int16_t pack2_current_sensor = 0;
-static int16_t pack3_current_sensor = 0;
-static int16_t pack4_current_sensor = 0;
-static int16_t pack5_current_sensor = 0;
-static int16_t pack6_current_sensor = 0;
-static int16_t pack7_current_sensor = 0;
-static int16_t pack8_current_sensor = 0;
-static int16_t pack1_temperature_avg_high = 0;
-static int16_t pack2_temperature_avg_high = 0;
-static int16_t pack3_temperature_avg_high = 0;
-static int16_t pack4_temperature_avg_high = 0;
-static int16_t pack5_temperature_avg_high = 0;
-static int16_t pack6_temperature_avg_high = 0;
-static int16_t pack7_temperature_avg_high = 0;
-static int16_t pack8_temperature_avg_high = 0;
-static int16_t pack1_temperature_avg_low = 0;
-static int16_t pack2_temperature_avg_low = 0;
-static int16_t pack3_temperature_avg_low = 0;
-static int16_t pack4_temperature_avg_low = 0;
-static int16_t pack5_temperature_avg_low = 0;
-static int16_t pack6_temperature_avg_low = 0;
-static int16_t pack7_temperature_avg_low = 0;
-static int16_t pack8_temperature_avg_low = 0;
-static uint16_t pack1_voltage = 0;
-static uint16_t pack2_voltage = 0;
-static uint16_t pack3_voltage = 0;
-static uint16_t pack4_voltage = 0;
-static uint16_t pack5_voltage = 0;
-static uint16_t pack6_voltage = 0;
-static uint16_t pack7_voltage = 0;
-static uint16_t pack8_voltage = 0;
-static uint8_t pack1_SOC = 0;
-static uint8_t pack2_SOC = 0;
-static uint8_t pack3_SOC = 0;
-static uint8_t pack4_SOC = 0;
-static uint8_t pack5_SOC = 0;
-static uint8_t pack6_SOC = 0;
-static uint8_t pack7_SOC = 0;
-static uint8_t pack8_SOC = 0;
-static uint8_t pack_error = 0;
-static uint8_t firmware_pack_minor = 0;
-static uint8_t firmware_pack_major = 0;
-static uint8_t STATUS_OPERATIONAL_PACKS =
-    0;  //0x1875 b2 contains status for operational packs (responding) in binary so 01111111 is pack 8 not operational, 11101101 is pack 5 & 2 not operational
-static uint8_t NUMBER_OF_PACKS = 0;  //1-8
-static uint8_t contactor_status = 0;
-static uint8_t statemachine_polling = 0;
-static bool charging_disabled = false;
-static bool b0_idle = false;
-static bool b1_ok_discharge = false;
-static bool b2_ok_charge = false;
-static bool b3_discharging = false;
-static bool b4_charging = false;
-static bool b5_operational = false;
-static bool b6_active_error = false;
-
-void update_values_battery() {  //This function maps all the values fetched via CAN to the correct parameters used for modbus
+void FoxessBattery::
+    update_values() {  //This function maps all the values fetched via CAN to the correct parameters used for modbus
 
   datalayer.battery.status.remaining_capacity_Wh = static_cast<uint32_t>(
       (static_cast<double>(datalayer.battery.status.real_soc) / 10000) * datalayer.battery.info.total_capacity_Wh);
@@ -95,9 +22,6 @@ void update_values_battery() {  //This function maps all the values fetched via 
       ((datalayer.battery.status.voltage_dV * max_discharge_power_dA) / 100);
 
   datalayer.battery.status.max_charge_power_W = ((datalayer.battery.status.voltage_dV * max_charge_power_dA) / 100);
-
-  //Map all cell voltages to the global array
-  memcpy(datalayer.battery.status.cell_voltages_mV, cellvoltages_mV, 128 * sizeof(uint16_t));
 
   switch (NUMBER_OF_PACKS) {
     case 1:  //HS2.6 (48V invalid combo for most HV inverters)
@@ -146,7 +70,7 @@ void update_values_battery() {  //This function maps all the values fetched via 
   }
 }
 
-void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
+void FoxessBattery::handle_incoming_can_frame(CAN_frame rx_frame) {
   switch (rx_frame.ID) {
     case 0x1872:  //BMS_Limits
       datalayer.battery.info.max_design_voltage_dV = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
@@ -279,204 +203,203 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
     case 0x0D59:
       break;
     case 0x0C1D:  // Cellvolts 1
-      cellvoltages_mV[0] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[1] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[2] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[3] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[0] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[1] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[2] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[3] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C21:  // Cellvolts 2
-      cellvoltages_mV[4] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[5] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[6] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[7] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[4] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[5] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[6] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[7] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C25:  // Cellvolts 3
-      cellvoltages_mV[8] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[9] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[10] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[11] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[8] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[9] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[10] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[11] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C29:  // Cellvolts 4
-      cellvoltages_mV[12] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[13] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[14] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[15] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[12] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[13] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[14] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[15] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C2D:  // Cellvolts 5
-      cellvoltages_mV[16] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[17] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[18] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[19] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[16] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[17] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[18] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[19] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C31:  // Cellvolts 6
-      cellvoltages_mV[20] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[21] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[22] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[23] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[20] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[21] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[22] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[23] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C35:  // Cellvolts 7
-      cellvoltages_mV[24] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[25] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[26] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[27] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[24] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[25] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[26] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[27] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C39:  // Cellvolts 8
-      cellvoltages_mV[28] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[29] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[30] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[31] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[28] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[29] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[30] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[31] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C3D:  // Cellvolts 9
-      cellvoltages_mV[32] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[33] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[34] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[35] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[32] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[33] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[34] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[35] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C41:  // Cellvolts 10
-      cellvoltages_mV[36] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[37] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[38] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[39] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[36] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[37] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[38] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[39] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C45:  // Cellvolts 11
-      cellvoltages_mV[40] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[41] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[42] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[43] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[40] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[41] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[42] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[43] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C49:  // Cellvolts 12
-      cellvoltages_mV[44] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[45] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[46] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[47] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[44] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[45] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[46] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[47] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C4D:  // Cellvolts 13
-      cellvoltages_mV[48] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[49] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[50] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[51] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[48] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[49] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[50] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[51] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C51:  // Cellvolts 14
-      cellvoltages_mV[52] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[53] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[54] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[55] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[52] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[53] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[54] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[55] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C55:  // Cellvolts 15
-      cellvoltages_mV[56] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[57] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[58] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[59] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[56] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[57] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[58] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[59] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C59:  // Cellvolts 16
-      cellvoltages_mV[60] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[61] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[62] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[63] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[60] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[61] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[62] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[63] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C5D:  // Cellvolts 17
-      cellvoltages_mV[64] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[65] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[66] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[67] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[64] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[65] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[66] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[67] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C61:  // Cellvolts 18
-      cellvoltages_mV[68] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[69] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[70] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[71] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[68] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[69] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[70] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[71] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C65:  // Cellvolts 19
-      cellvoltages_mV[72] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[73] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[74] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[75] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[72] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[73] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[74] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[75] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C69:  // Cellvolts 20
-      cellvoltages_mV[76] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[77] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[78] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[79] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[76] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[77] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[78] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[79] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C6D:  // Cellvolts 21
-      cellvoltages_mV[80] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[81] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[82] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[83] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[80] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[81] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[82] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[83] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C71:  // Cellvolts 22
-      cellvoltages_mV[84] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[85] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[86] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[87] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[84] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[85] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[86] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[87] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C75:  // Cellvolts 23
-      cellvoltages_mV[88] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[89] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[90] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[91] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[88] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[89] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[90] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[91] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C79:  // Cellvolts 24
-      cellvoltages_mV[92] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[93] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[94] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[95] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[92] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[93] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[94] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[95] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C7D:  // Cellvolts 25
-      cellvoltages_mV[96] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[97] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[98] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[99] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[96] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[97] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[98] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[99] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C81:  // Cellvolts 26
-      cellvoltages_mV[100] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[101] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[102] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[103] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[100] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[101] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[102] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[103] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C85:  // Cellvolts 27
-      cellvoltages_mV[104] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[105] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[106] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[107] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[104] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[105] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[106] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[107] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C89:  // Cellvolts 28
-      cellvoltages_mV[108] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[109] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[110] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[111] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[108] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[109] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[110] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[111] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C8D:  // Cellvolts 29
-      cellvoltages_mV[112] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[113] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[114] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[115] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[112] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[113] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[114] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[115] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C91:  // Cellvolts 30
-      cellvoltages_mV[116] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[117] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[118] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[119] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[116] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[117] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[118] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[119] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C95:  // Cellvolts 31
-      cellvoltages_mV[120] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[121] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[122] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[123] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[120] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[121] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[122] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[123] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     case 0x0C99:  // Cellvolts 32
-      cellvoltages_mV[124] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
-      cellvoltages_mV[125] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
-      cellvoltages_mV[126] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
-      cellvoltages_mV[127] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
+      datalayer.battery.status.cell_voltages_mV[124] = (uint16_t)(rx_frame.data.u8[1] << 8 | rx_frame.data.u8[0]);
+      datalayer.battery.status.cell_voltages_mV[125] = (uint16_t)(rx_frame.data.u8[3] << 8 | rx_frame.data.u8[2]);
+      datalayer.battery.status.cell_voltages_mV[126] = (uint16_t)(rx_frame.data.u8[5] << 8 | rx_frame.data.u8[4]);
+      datalayer.battery.status.cell_voltages_mV[127] = (uint16_t)(rx_frame.data.u8[7] << 8 | rx_frame.data.u8[6]);
       break;
     default:
       break;
   }
 }
-void transmit_can_battery() {
-  unsigned long currentMillis = millis();
 
+void FoxessBattery::transmit_can(unsigned long currentMillis) {
   // Send 500ms CAN Message
   if (currentMillis - previousMillis500 >= INTERVAL_500_MS) {
     previousMillis500 = currentMillis;
@@ -491,7 +414,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_send_pack_statistics
+        transmit_can_frame(&FOX_1871);  //bms_send_pack_statistics
         break;
       case 1:  //1s
         FOX_1871.data.u8[0] = 0x02;
@@ -502,7 +425,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_stop_sending
+        transmit_can_frame(&FOX_1871);  //bms_stop_sending
         break;
       case 2:  //1.5s
         FOX_1871.data.u8[0] = 0x05;
@@ -513,7 +436,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_serial_request
+        transmit_can_frame(&FOX_1871);  //bms_serial_request
         break;
       case 3:  //2.0s
         FOX_1871.data.u8[0] = 0x01;
@@ -524,7 +447,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_send_pack_statistics
+        transmit_can_frame(&FOX_1871);  //bms_send_pack_statistics
         break;
       case 4:  //2.5s
         FOX_1871.data.u8[0] = 0x02;
@@ -535,7 +458,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_stop_sending
+        transmit_can_frame(&FOX_1871);  //bms_stop_sending
         break;
       case 5:  //3.0s cell temp and voltages
         //0x1871 [0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00]
@@ -547,7 +470,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_send_pack_cell_volts
+        transmit_can_frame(&FOX_1871);  //bms_send_pack_cell_volts
         //0x1871 [0x01, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00]
         FOX_1871.data.u8[0] = 0x01;
         FOX_1871.data.u8[1] = 0x00;
@@ -557,7 +480,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_send_pack_cell_temps
+        transmit_can_frame(&FOX_1871);  //bms_send_pack_cell_temps
         break;
       case 6:  //3.5s
         FOX_1871.data.u8[0] = 0x01;
@@ -568,7 +491,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_send_pack_statistics
+        transmit_can_frame(&FOX_1871);  //bms_send_pack_statistics
         break;
       case 7:  //4.0s
         FOX_1871.data.u8[0] = 0x02;
@@ -579,7 +502,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_stop_sending
+        transmit_can_frame(&FOX_1871);  //bms_stop_sending
         break;
       case 8:  //4.5s
         FOX_1871.data.u8[0] = 0x01;
@@ -590,7 +513,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_send_pack_statistics
+        transmit_can_frame(&FOX_1871);  //bms_send_pack_statistics
         break;
       case 9:  //5.0s
         FOX_1871.data.u8[0] = 0x02;
@@ -601,7 +524,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_stop_sending
+        transmit_can_frame(&FOX_1871);  //bms_stop_sending
         break;
       case 10:  //5.5s
         //0x1871 [0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00]
@@ -613,7 +536,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_send_pack_cell_volts
+        transmit_can_frame(&FOX_1871);  //bms_send_pack_cell_volts
         //0x1871 [0x01, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00]
         FOX_1871.data.u8[0] = 0x01;
         FOX_1871.data.u8[1] = 0x00;
@@ -623,7 +546,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x00;
         FOX_1871.data.u8[6] = 0x00;
         FOX_1871.data.u8[7] = 0x00;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //bms_send_pack_cell_temps
+        transmit_can_frame(&FOX_1871);  //bms_send_pack_cell_temps
         break;
       case 11:  //6.0s 0x1871 [0x03, 0x06, 0x17, 0x05, 0x09, 0x09, 0x28, 0x22]
         FOX_1871.data.u8[0] = 0x03;
@@ -634,7 +557,7 @@ void transmit_can_battery() {
         FOX_1871.data.u8[5] = 0x09;
         FOX_1871.data.u8[6] = 0x28;
         FOX_1871.data.u8[7] = 0x22;
-        transmit_can_frame(&FOX_1871, can_config.battery);  //timestamp
+        transmit_can_frame(&FOX_1871);  //timestamp
         break;
       default:
         statemachine_polling = 0;
@@ -645,8 +568,8 @@ void transmit_can_battery() {
   }
 }
 
-void setup_battery(void) {  // Performs one time setup at startup
-  strncpy(datalayer.system.info.battery_protocol, "FoxESS HV2600/ECS4100 OEM battery", 63);
+void FoxessBattery::setup(void) {  // Performs one time setup at startup
+  strncpy(datalayer.system.info.battery_protocol, Name, 63);
   datalayer.system.info.battery_protocol[63] = '\0';
   datalayer.battery.info.number_of_cells = 0;  //Startup with no cells, populates later when we know packsize
   datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_DV;
@@ -654,6 +577,5 @@ void setup_battery(void) {  // Performs one time setup at startup
   datalayer.battery.info.max_cell_voltage_mV = MAX_CELL_VOLTAGE_MV;
   datalayer.battery.info.min_cell_voltage_mV = MIN_CELL_VOLTAGE_MV;
   datalayer.battery.info.max_cell_voltage_deviation_mV = MAX_CELL_DEVIATION_MV;
+  datalayer.system.status.battery_allows_contactor_closing = true;
 }
-
-#endif

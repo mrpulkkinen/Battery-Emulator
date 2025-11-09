@@ -1,6 +1,6 @@
 # This GithHub Action runs the pre-commit defined in the .pre-commit-config.yaml file
 
-name: Run pre-commit
+name: 📝 Run pre-commit
 
 on:
   - push
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Run pre-commit
       uses: pre-commit/action@v3.0.1

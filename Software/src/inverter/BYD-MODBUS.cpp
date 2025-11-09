@@ -1,37 +1,27 @@
-#include "../include.h"
-#ifdef BYD_MODBUS
-#include "../datalayer/datalayer.h"
-#include "../devboard/utils/events.h"
 #include "BYD-MODBUS.h"
+#include "../battery/BATTERIES.h"
+#include "../datalayer/datalayer.h"
+#include "../devboard/hal/hal.h"
+#include "../devboard/utils/events.h"
 
 // For modbus register definitions, see https://gitlab.com/pelle8/inverter_resources/-/blob/main/byd_registers_modbus_rtu.md
 
-#define HISTORY_LENGTH 3  // Amount of samples(minutes) that needs to match for register to be considered stale
-static unsigned long previousMillis60s = 0;  // will store last time a 60s event occured
-static uint32_t user_configured_max_discharge_W = 0;
-static uint32_t user_configured_max_charge_W = 0;
-static uint32_t max_discharge_W = 0;
-static uint32_t max_charge_W = 0;
-static uint16_t register_401_history[HISTORY_LENGTH] = {0};
-static uint8_t history_index = 0;
-static uint8_t bms_char_dis_status = STANDBY;
-static bool all_401_values_equal = false;
-
-void update_modbus_registers_inverter() {
-  verify_temperature_modbus();
+void BydModbusInverter::update_values() {
+  verify_temperature();
   verify_inverter_modbus();
   handle_update_data_modbusp201_byd();
   handle_update_data_modbusp301_byd();
 }
 
-void handle_static_data_modbus_byd() {
+void BydModbusInverter::handle_static_data() {
   // Store the data into the array
   static uint16_t si_data[] = {21321, 1};
   static uint16_t byd_data[] = {16985, 17408, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   static uint16_t battery_data[] = {16985, 17440, 16993, 29812, 25970, 31021, 17007, 30752,
                                     20594, 25965, 26997, 27936, 18518, 0,     0,     0};
-  static uint16_t volt_data[] = {13614, 12288, 0, 0, 0, 0, 0, 0, 13102, 12598, 0, 0, 0, 0, 0, 0};
-  static uint16_t serial_data[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  static uint16_t volt_data[] = {13614, 12288, 0, 0, 0, 0, 0, 0, 13102, 12854, 0, 0, 0, 0, 0, 0};
+  static uint16_t serial_data[] = {20528, 13104, 21552, 12848, 23089, 14641, 12593, 14384,
+                                   12336, 12337, 0,     0,     0,     0,     0,     0};
   static uint16_t static_data[] = {1, 0};
   static uint16_t* data_array_pointers[] = {si_data, byd_data, battery_data, volt_data, serial_data, static_data};
   static uint16_t data_sizes[] = {sizeof(si_data),   sizeof(byd_data),    sizeof(battery_data),
@@ -39,23 +29,34 @@ void handle_static_data_modbus_byd() {
   static uint16_t i = 100;
   for (uint8_t arr_idx = 0; arr_idx < sizeof(data_array_pointers) / sizeof(uint16_t*); arr_idx++) {
     uint16_t data_size = data_sizes[arr_idx];
-    memcpy(&mbPV[i], data_array_pointers[arr_idx], data_size);
+    for (int j = 0; j < data_size / sizeof(uint16_t); j++) {
+      mbPV[i + j] = data_array_pointers[arr_idx][j];
+    }
     i += data_size / sizeof(uint16_t);
   }
   static uint16_t init_p201[13] = {0, 0, 0, MAX_POWER, MAX_POWER, 0, 0, 53248, 10, 53248, 10, 0, 0};
-  memcpy(&mbPV[200], init_p201, sizeof(init_p201));
+  for (int i = 0; i < sizeof(init_p201) / sizeof(uint16_t); i++) {
+    mbPV[200 + i] = init_p201[i];
+  }
   static uint16_t init_p301[24] = {0,  0,  128, 0, 0,  0,     0, 0, 0,  2000,  0,   2000,
                                    75, 95, 0,   0, 16, 22741, 0, 0, 13, 52064, 230, 9900};
-  memcpy(&mbPV[300], init_p301, sizeof(init_p301));
+  for (int i = 0; i < sizeof(init_p301) / sizeof(uint16_t); i++) {
+    mbPV[300 + i] = init_p301[i];
+  }
 }
 
-void handle_update_data_modbusp201_byd() {
-  mbPV[202] = std::min(datalayer.battery.info.total_capacity_Wh, static_cast<uint32_t>(60000u));  //Cap to 60kWh
+void BydModbusInverter::handle_update_data_modbusp201_byd() {
+  if (battery2) {
+    mbPV[202] = std::min(datalayer.battery.info.total_capacity_Wh + datalayer.battery2.info.total_capacity_Wh,
+                         static_cast<uint32_t>(60000u));  //Cap to 60kWh
+  } else {
+    mbPV[202] = std::min(datalayer.battery.info.total_capacity_Wh, static_cast<uint32_t>(60000u));  //Cap to 60kWh
+  }
   mbPV[205] = (datalayer.battery.info.max_design_voltage_dV);  // Max Voltage, if higher Gen24 forces discharge
   mbPV[206] = (datalayer.battery.info.min_design_voltage_dV);  // Min Voltage, if lower Gen24 disables battery
 }
 
-void handle_update_data_modbusp301_byd() {
+void BydModbusInverter::handle_update_data_modbusp301_byd() {
   if (datalayer.battery.status.current_dA == 0) {
     bms_char_dis_status = STANDBY;
   } else if (datalayer.battery.status.current_dA < 0) {  //Negative value = Discharging
@@ -83,9 +84,20 @@ void handle_update_data_modbusp301_byd() {
   mbPV[300] = datalayer.battery.status.bms_status;
   mbPV[302] = 128 + bms_char_dis_status;
   mbPV[303] = datalayer.battery.status.reported_soc;
-  mbPV[304] = std::min(datalayer.battery.info.total_capacity_Wh, static_cast<uint32_t>(60000u));  //Cap to 60kWh
-  mbPV[305] =
-      std::min(datalayer.battery.status.reported_remaining_capacity_Wh, static_cast<uint32_t>(60000u));  //Cap to 60kWh
+  if (battery2) {
+    mbPV[304] = std::min(datalayer.battery.info.total_capacity_Wh + datalayer.battery2.info.total_capacity_Wh,
+                         static_cast<uint32_t>(60000u));  //Cap to 60kWh
+  } else {
+    mbPV[304] = std::min(datalayer.battery.info.total_capacity_Wh, static_cast<uint32_t>(60000u));  //Cap to 60kWh
+  }
+  if (battery2) {
+    mbPV[305] = std::min(datalayer.battery.status.reported_remaining_capacity_Wh +
+                             datalayer.battery2.status.reported_remaining_capacity_Wh,
+                         static_cast<uint32_t>(60000u));  //Cap to 60kWh
+  } else {
+    mbPV[305] = std::min(datalayer.battery.status.reported_remaining_capacity_Wh,
+                         static_cast<uint32_t>(60000u));  //Cap to 60kWh
+  }
   mbPV[306] = std::min(max_discharge_W, static_cast<uint32_t>(30000u));  //Cap to 30000 if exceeding
   mbPV[307] = std::min(max_charge_W, static_cast<uint32_t>(30000u));     //Cap to 30000 if exceeding
   mbPV[310] = datalayer.battery.status.voltage_dV;
@@ -94,7 +106,7 @@ void handle_update_data_modbusp301_byd() {
   mbPV[323] = datalayer.battery.status.soh_pptt;
 }
 
-void verify_temperature_modbus() {
+void BydModbusInverter::verify_temperature() {
   if (datalayer.battery.info.chemistry == battery_chemistry_enum::LFP) {
     return;  // Skip the following section
   }
@@ -116,7 +128,7 @@ void verify_temperature_modbus() {
   }
 }
 
-void verify_inverter_modbus() {
+void BydModbusInverter::verify_inverter_modbus() {
   // Every 60 seconds, the Gen24 writes to this 401 register, alternating between 00FF and FF00.
   // We sample the register every 60 seconds. Incase the value has not changed for 3 minutes, we raise an event
   unsigned long currentMillis = millis();
@@ -143,8 +155,25 @@ void verify_inverter_modbus() {
     history_index = (history_index + 1) % HISTORY_LENGTH;
   }
 }
-void setup_inverter(void) {  // Performs one time setup at startup over CAN bus
-  strncpy(datalayer.system.info.inverter_protocol, "BYD 11kWh HVM battery over Modbus RTU", 63);
-  datalayer.system.info.inverter_protocol[63] = '\0';
+
+bool BydModbusInverter::setup(void) {  // Performs one time setup at startup over CAN bus
+  // Init Static data to the RTU Modbus
+  handle_static_data();
+
+  // Init Serial2 connected to the RTU Modbus
+  RTUutils::prepareHardwareSerial(Serial2);
+
+  auto rx_pin = esp32hal->RS485_RX_PIN();
+  auto tx_pin = esp32hal->RS485_TX_PIN();
+
+  if (!esp32hal->alloc_pins(Name, rx_pin, tx_pin)) {
+    return false;
+  }
+
+  Serial2.begin(9600, SERIAL_8N1, rx_pin, tx_pin);
+
+  // Start ModbusRTU background task
+  MBserver.begin(Serial2, esp32hal->MODBUS_CORE());
+
+  return true;
 }
-#endif
