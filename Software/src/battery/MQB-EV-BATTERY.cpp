@@ -53,15 +53,13 @@ class MQBModule {
         break;
       case 1:
         cell_voltages_[4] = (static_cast<uint16_t>(b[1] >> 4) + (static_cast<uint16_t>(b[2]) << 4) + 1000) * 0.001f;
-        cell_voltages_[5] =
-            (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[5] = (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
         cell_voltages_[6] = ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
         cell_voltages_[7] = (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
         break;
       case 2:
         cell_voltages_[8] = (static_cast<uint16_t>(b[1] >> 4) + (static_cast<uint16_t>(b[2]) << 4) + 1000) * 0.001f;
-        cell_voltages_[9] =
-            (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
+        cell_voltages_[9] = (static_cast<uint16_t>(b[3]) + (static_cast<uint16_t>(b[4] & 0x0F) << 8) + 1000) * 0.001f;
         cell_voltages_[10] = ((static_cast<uint16_t>(b[5]) << 4) + static_cast<uint16_t>(b[4] >> 4) + 1000) * 0.001f;
         cell_voltages_[11] = (static_cast<uint16_t>(b[6]) + (static_cast<uint16_t>(b[7] & 0x0F) << 8) + 1000) * 0.001f;
         break;
@@ -325,17 +323,11 @@ class MQBModuleManager {
 };
 
 MqbEvBattery::MqbEvBattery() : CanBattery(), module_manager_(new MQBModuleManager()) {
-  poll_frame_a_ = {.FD = false,
-                   .ext_ID = false,
-                   .DLC = 8,
-                   .ID = 0x0BA,
-                   .data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
+  poll_frame_a_ = {
+      .FD = false, .ext_ID = false, .DLC = 8, .ID = 0x0BA, .data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
 
-  poll_frame_b_ = {.FD = false,
-                   .ext_ID = false,
-                   .DLC = 8,
-                   .ID = 0x0BA,
-                   .data = {0x45, 0x01, 0x28, 0x00, 0x00, 0x00, 0x00, 0x30}};
+  poll_frame_b_ = {
+      .FD = false, .ext_ID = false, .DLC = 8, .ID = 0x0BA, .data = {0x45, 0x01, 0x28, 0x00, 0x00, 0x00, 0x00, 0x30}};
 }
 
 void MqbEvBattery::setup(void) {
@@ -386,8 +378,7 @@ void MqbEvBattery::publish_pack_state() {
 
   const uint16_t series_cells = module_manager_->seriesCells();
   if (series_cells > 0) {
-    datalayer.battery.info.number_of_cells =
-        std::min<uint16_t>(series_cells, static_cast<uint16_t>(MAX_AMOUNT_CELLS));
+    datalayer.battery.info.number_of_cells = std::min<uint16_t>(series_cells, static_cast<uint16_t>(MAX_AMOUNT_CELLS));
   }
 
   const uint16_t pack_voltage_dV = static_cast<uint16_t>(std::lround(module_manager_->packVoltage() * 10.0f));
